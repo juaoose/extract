@@ -6,6 +6,7 @@ import (
 	"image/jpeg"
 	"log"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,20 +20,27 @@ import (
 )
 
 func main() {
-	dir := "/root/development/leanfactory/extract/pdfs"
+
 	search := "FORMULARIO DEL REGISTRO"
 
 	var wg sync.WaitGroup // create a wait group
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 
-		if !info.IsDir() && filepath.Ext(path) == ".pdf" {
+		// Result directory
+		createDirectories()
+
+		if d.IsDir() && d.Name() == "result" {
+			return filepath.SkipDir
+		}
+
+		if !d.IsDir() && filepath.Ext(path) == ".pdf" {
 			fmt.Println("Processing:", path)
 			fileName := strings.TrimSuffix(path, ".pdf")
-			outPath := fileName + "_formulario.pdf"
+			outPath := "result/" + fileName + "_formulario.pdf"
 
 			// We start goroutines per extraction job and make sure to wait
 			wg.Add(1)
@@ -49,6 +57,33 @@ func main() {
 
 	// Wait for all the goroutines to end
 	wg.Wait()
+
+	clean()
+}
+
+func createDirectories() {
+	tempPath := filepath.Join(".", "/temp")
+	err := os.MkdirAll(tempPath, os.ModePerm)
+	if err != nil {
+		panic(err)
+	}
+
+	resultPath := filepath.Join(".", "/result")
+	err = os.MkdirAll(resultPath, os.ModePerm)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func clean() {
+	dir, err := os.ReadDir("temp")
+	if err != nil {
+		panic(err)
+	}
+
+	for _, d := range dir {
+		os.RemoveAll(path.Join([]string{"temp", d.Name()}...))
+	}
 }
 
 func extractPages(inPath string, outPath string, search string) {
@@ -63,6 +98,7 @@ func extractPages(inPath string, outPath string, search string) {
 
 	// We extract and convert every image, this because every document
 	// could have different image types
+	log.Println(fileName)
 	err = api.ExtractImages(file, nil, digestImage(fileName), nil)
 	if err != nil {
 		panic(err)
@@ -79,7 +115,7 @@ func extractPages(inPath string, outPath string, search string) {
 
 	numPages := pageCount(inPath)
 	for i := 1; i <= numPages; i++ {
-		imagePath := fmt.Sprintf("%v_%d_Im0.jpg", fileName, i)
+		imagePath := fmt.Sprintf("temp/%v_%d_Im0.jpg", fileName, i)
 		client.SetImage(imagePath)
 		text, err := client.Text()
 		if err != nil {
@@ -107,8 +143,9 @@ func extractPages(inPath string, outPath string, search string) {
 	// Use pdfcpu to copy the selected pages to a new PDF file
 	pagesToCopy := []string{}
 	for _, page := range pagesToKeep {
-		pagesToCopy = append(pagesToCopy, fmt.Sprintf("%v_%d_Im0.jpg", fileName, page))
+		pagesToCopy = append(pagesToCopy, fmt.Sprintf("temp/%v_%d_Im0.jpg", fileName, page))
 	}
+
 	imp := pdf.DefaultImportConfig()
 	err = api.ImportImagesFile(pagesToCopy, outPath, imp, nil)
 	if err != nil {
@@ -127,7 +164,7 @@ func extractPages(inPath string, outPath string, search string) {
 func digestImage(docName string) func(model.Image, bool, int) error {
 	return func(img model.Image, singleImgPerPage bool, maxPageDigits int) error {
 		// docname_pageNr_Im0
-		f, err := os.Create(fmt.Sprintf("%v_%v_%v.jpg", docName, img.PageNr, img.Name))
+		f, err := os.Create(fmt.Sprintf("temp/%v_%v_%v.jpg", docName, img.PageNr, img.Name))
 		if err != nil {
 			panic(err)
 		}
