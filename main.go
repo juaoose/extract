@@ -152,13 +152,6 @@ func extractPages(inPath string, outPath string, search string) {
 		panic(err)
 	}
 
-	// TODO Clean after
-	// Delete the temporary files
-	// cmd = exec.Command("rm", fmt.Sprintf("%v_*.png", fileName))
-	// err = cmd.Run()
-	// if err != nil {
-	// 	panic(err)
-	// }
 }
 
 func digestImage(docName string) func(model.Image, bool, int) error {
