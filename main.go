@@ -1,16 +1,16 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/otiai10/gosseract/v2"
+	"github.com/pdfcpu/pdfcpu/pkg/api"
+	pdf "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 )
 
 func main() {
@@ -35,13 +35,14 @@ func main() {
 
 func extractPages(inPath string, outPath string, search string) {
 	// Extract pages as images
-	cmd := exec.Command("pdfcpu", "extract", "-m", "i", inPath, ".")
-	err := cmd.Run()
+
+	err := api.ExtractImagesFile(inPath, ".", nil, nil)
 	if err != nil {
 		panic(err)
 	}
 
 	pagesToKeep := []int{}
+	found := false
 	client := gosseract.NewClient()
 	client.SetLanguage("spa")
 	defer client.Close()
@@ -56,33 +57,37 @@ func extractPages(inPath string, outPath string, search string) {
 	}
 	for i := 1; i <= numPages; i++ {
 		imagePath := fmt.Sprintf("%v_%0*d_Im0.jpg", fileName, numZeros, i)
-		log.Println(imagePath)
 		client.SetImage(imagePath)
 		text, err := client.Text()
 		if err != nil {
 			panic(err)
 		}
+
 		if strings.Contains(text, search) {
 			pagesToKeep = append(pagesToKeep, i)
-		} else {
-			// TODO we can stop with the document here
+			found = true
+		} else if found {
+			log.Printf("Processed %d lines to find document", i)
+			break
 		}
+
 	}
 
 	log.Println("finished ocr")
+
+	if len(pagesToKeep) == 0 {
+		log.Println("No pages matched")
+		return
+	}
 
 	// Use pdfcpu to copy the selected pages to a new PDF file
 	pagesToCopy := []string{}
 	for _, page := range pagesToKeep {
 		pagesToCopy = append(pagesToCopy, fmt.Sprintf("%v_%0*d_Im0.jpg", fileName, numZeros, page))
 	}
-	// pagesArg := strings.Join(pagesToCopy, " ")
-	cmd = exec.Command("pdfcpu", "import", outPath)
-	cmd.Args = append(cmd.Args, pagesToCopy...)
-	log.Printf("command to run %v", cmd.String())
-	err = cmd.Run()
+	imp := pdf.DefaultImportConfig()
+	err = api.ImportImagesFile(pagesToCopy, outPath, imp, nil)
 	if err != nil {
-		log.Printf("%v", err)
 		panic(err)
 	}
 
@@ -95,27 +100,18 @@ func extractPages(inPath string, outPath string, search string) {
 }
 
 func pageCount(pdfPath string) int {
-	// Get page count, probably easier using the API instead of the CLI
-	cmd := exec.Command("pdfcpu", "info", pdfPath)
-	grepCmd := exec.Command("grep", "Page count:")
-	awkCmd := exec.Command("awk", "{print $3}")
-	grepCmd.Stdin, _ = cmd.StdoutPipe()
-	awkCmd.Stdin, _ = grepCmd.StdoutPipe()
 
-	var output bytes.Buffer
-	awkCmd.Stdout = &output
+	info, err := api.InfoFile(pdfPath, nil, nil)
+	if err != nil {
+		panic(err)
+	}
 
-	_ = awkCmd.Start()
-	_ = grepCmd.Start()
-	_ = cmd.Run()
-	_ = grepCmd.Wait()
-	_ = awkCmd.Wait()
-
-	countString := strings.TrimSpace(output.String())
+	countString := strings.TrimSpace(strings.Split(info[1], ":")[1])
 
 	pageCount, err := strconv.Atoi(countString)
 	if err != nil {
 		panic(err)
 	}
+	log.Printf("This document has %d pages", pageCount)
 	return pageCount
 }
