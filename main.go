@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/disintegration/imaging"
 	"github.com/otiai10/gosseract/v2"
@@ -21,21 +22,33 @@ func main() {
 	dir := "/root/development/leanfactory/extract/pdfs"
 	search := "FORMULARIO DEL REGISTRO"
 
+	var wg sync.WaitGroup // create a wait group
+
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
+
 		if !info.IsDir() && filepath.Ext(path) == ".pdf" {
 			fmt.Println("Processing:", path)
 			fileName := strings.TrimSuffix(path, ".pdf")
 			outPath := fileName + "_formulario.pdf"
-			extractPages(path, outPath, search)
+
+			// We start goroutines per extraction job and make sure to wait
+			wg.Add(1)
+			go func() {
+				extractPages(path, outPath, search)
+				wg.Done()
+			}()
 		}
 		return nil
 	})
 	if err != nil {
 		panic(err)
 	}
+
+	// Wait for all the goroutines to end
+	wg.Wait()
 }
 
 func extractPages(inPath string, outPath string, search string) {
@@ -47,17 +60,23 @@ func extractPages(inPath string, outPath string, search string) {
 	defer file.Close()
 
 	fileName := strings.TrimSuffix(inPath, ".pdf")
+
+	// We extract and convert every image, this because every document
+	// could have different image types
 	err = api.ExtractImages(file, nil, digestImage(fileName), nil)
 	if err != nil {
 		panic(err)
 	}
 
 	pagesToKeep := []int{}
-	found := false
 	client := gosseract.NewClient()
 	client.SetLanguage("spa")
 	defer client.Close()
 	log.Println("starting ocr")
+
+	// Just so that we can end early
+	found := false
+
 	numPages := pageCount(inPath)
 	for i := 1; i <= numPages; i++ {
 		imagePath := fmt.Sprintf("%v_%d_Im0.jpg", fileName, i)
@@ -79,6 +98,7 @@ func extractPages(inPath string, outPath string, search string) {
 
 	log.Println("finished ocr")
 
+	// Dont generate am empty pdf
 	if len(pagesToKeep) == 0 {
 		log.Println("No pages matched")
 		return
