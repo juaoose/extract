@@ -1,16 +1,20 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"image/jpeg"
 	"log"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"github.com/disintegration/imaging"
 	"github.com/otiai10/gosseract/v2"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
 	pdf "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
+	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
 func main() {
@@ -23,7 +27,8 @@ func main() {
 		}
 		if !info.IsDir() && filepath.Ext(path) == ".pdf" {
 			fmt.Println("Processing:", path)
-			outPath := strings.TrimSuffix(path, ".pdf") + "_formulario.pdf"
+			fileName := strings.TrimSuffix(path, ".pdf")
+			outPath := fileName + "_formulario.pdf"
 			extractPages(path, outPath, search)
 		}
 		return nil
@@ -35,8 +40,14 @@ func main() {
 
 func extractPages(inPath string, outPath string, search string) {
 	// Extract pages as images
+	file, err := os.Open(inPath)
+	if err != nil {
+		fmt.Println(err)
+	}
+	defer file.Close()
 
-	err := api.ExtractImagesFile(inPath, ".", nil, nil)
+	fileName := strings.TrimSuffix(inPath, ".pdf")
+	err = api.ExtractImages(file, nil, digestImage(fileName), nil)
 	if err != nil {
 		panic(err)
 	}
@@ -47,16 +58,9 @@ func extractPages(inPath string, outPath string, search string) {
 	client.SetLanguage("spa")
 	defer client.Close()
 	log.Println("starting ocr")
-	fileName := strings.Split(filepath.Base(inPath), ".pdf")[0]
 	numPages := pageCount(inPath)
-	var numZeros int
-	if numPages < 100 {
-		numZeros = 2
-	} else {
-		numZeros = 3
-	}
 	for i := 1; i <= numPages; i++ {
-		imagePath := fmt.Sprintf("%v_%0*d_Im0.jpg", fileName, numZeros, i)
+		imagePath := fmt.Sprintf("%v_%d_Im0.jpg", fileName, i)
 		client.SetImage(imagePath)
 		text, err := client.Text()
 		if err != nil {
@@ -83,7 +87,7 @@ func extractPages(inPath string, outPath string, search string) {
 	// Use pdfcpu to copy the selected pages to a new PDF file
 	pagesToCopy := []string{}
 	for _, page := range pagesToKeep {
-		pagesToCopy = append(pagesToCopy, fmt.Sprintf("%v_%0*d_Im0.jpg", fileName, numZeros, page))
+		pagesToCopy = append(pagesToCopy, fmt.Sprintf("%v_%d_Im0.jpg", fileName, page))
 	}
 	imp := pdf.DefaultImportConfig()
 	err = api.ImportImagesFile(pagesToCopy, outPath, imp, nil)
@@ -91,12 +95,35 @@ func extractPages(inPath string, outPath string, search string) {
 		panic(err)
 	}
 
+	// TODO Clean after
 	// Delete the temporary files
 	// cmd = exec.Command("rm", fmt.Sprintf("%v_*.png", fileName))
 	// err = cmd.Run()
 	// if err != nil {
 	// 	panic(err)
 	// }
+}
+
+func digestImage(docName string) func(model.Image, bool, int) error {
+	return func(img model.Image, singleImgPerPage bool, maxPageDigits int) error {
+		// docname_pageNr_Im0
+		f, err := os.Create(fmt.Sprintf("%v_%v_%v.jpg", docName, img.PageNr, img.Name))
+		if err != nil {
+			panic(err)
+		}
+		defer f.Close()
+
+		imageOut, err := imaging.Decode(img)
+		if err != nil {
+			fmt.Println(err)
+			return errors.New("imaging.Decode() Error")
+		}
+		err = jpeg.Encode(f, imageOut, &jpeg.Options{Quality: 100})
+		if err != nil {
+			return errors.New("digestImage jpeg.Encode( Error")
+		}
+		return nil
+	}
 }
 
 func pageCount(pdfPath string) int {

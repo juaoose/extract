@@ -8,6 +8,7 @@ require (
 )
 
 require (
+	github.com/disintegration/imaging v1.6.2
 	github.com/hhrutter/lzw v0.0.0-20190829144645-6f07a24e8650 // indirect
 	github.com/hhrutter/tiff v0.0.0-20190829141212-736cae8d0bc7 // indirect
 	github.com/mattn/go-runewidth v0.0.14 // indirect
