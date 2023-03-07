@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/disintegration/imaging"
 	"github.com/otiai10/gosseract/v2"
@@ -19,11 +18,12 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
+// export TESSDATA_PREFIX=/root/development/leanfactory/extract/tess
 func main() {
 
 	search := "FORMULARIO DEL REGISTRO"
 
-	var wg sync.WaitGroup // create a wait group
+	// var wg sync.WaitGroup // create a wait group
 
 	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -43,11 +43,11 @@ func main() {
 			outPath := "result/" + fileName + "_formulario.pdf"
 
 			// We start goroutines per extraction job and make sure to wait
-			wg.Add(1)
-			go func() {
-				extractPages(path, outPath, search)
-				wg.Done()
-			}()
+			// wg.Add(1)
+			// go func() {
+			extractPages(path, outPath, search)
+			// wg.Done()
+			// }()
 		}
 		return nil
 	})
@@ -56,7 +56,7 @@ func main() {
 	}
 
 	// Wait for all the goroutines to end
-	wg.Wait()
+	// wg.Wait()
 
 	clean()
 }
@@ -119,12 +119,15 @@ func extractPages(inPath string, outPath string, search string) {
 		client.SetImage(imagePath)
 		text, err := client.Text()
 		if err != nil {
-			panic(err)
+			// TODO(juaoose) not panicking so that we just move on
+			log.Printf("Fatal error performing OCR %v", err)
+			return
 		}
 
 		if strings.Contains(text, search) {
 			pagesToKeep = append(pagesToKeep, i)
 			found = true
+			log.Printf("Page #%d matches", i)
 		} else if found {
 			log.Printf("Processed %d lines to find document", i)
 			break
@@ -134,9 +137,10 @@ func extractPages(inPath string, outPath string, search string) {
 
 	log.Println("finished ocr")
 
-	// Dont generate am empty pdf
-	if len(pagesToKeep) == 0 {
-		log.Println("No pages matched")
+	// Dont generate an empty or non compliant PDF
+	// The ones we want have at least 2 pages, if not, OCR was not succesful
+	if len(pagesToKeep) < 2 {
+		log.Printf("No PDF generated, %v pages matched.", len(pagesToKeep))
 		return
 	}
 
@@ -168,7 +172,9 @@ func digestImage(docName string) func(model.Image, bool, int) error {
 			fmt.Println(err)
 			return errors.New("imaging.Decode() Error")
 		}
-		err = jpeg.Encode(f, imageOut, &jpeg.Options{Quality: 100})
+
+		// This affects doc size, 75% seems to be a good spot
+		err = jpeg.Encode(f, imageOut, &jpeg.Options{Quality: 75})
 		if err != nil {
 			return errors.New("digestImage jpeg.Encode( Error")
 		}
