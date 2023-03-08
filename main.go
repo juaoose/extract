@@ -20,8 +20,6 @@ func main() {
 
 	search := "FORMULARIO DEL REGISTRO"
 
-	// var wg sync.WaitGroup
-
 	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -35,28 +33,19 @@ func main() {
 		}
 		client := gosseract.NewClient()
 		client.SetLanguage("spa")
-		client.SetPageSegMode(gosseract.PSM_SINGLE_COLUMN)
 		defer client.Close()
 
 		if !d.IsDir() && filepath.Ext(path) == ".pdf" {
 			fileName := strings.TrimSuffix(path, ".pdf")
 			outPath := "result/" + fileName + "_formulario.pdf"
 
-			// We start goroutines per extraction job and make sure to wait
-			// wg.Add(1)
-			// go func() {
 			extractPages(client, path, outPath, search)
-			// wg.Done()
-			// }()
 		}
 		return nil
 	})
 	if err != nil {
 		panic(err)
 	}
-
-	// Wait for all the goroutines to end
-	// wg.Wait()
 
 }
 
