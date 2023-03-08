@@ -15,7 +15,6 @@ import (
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
-// export TESSDATA_PREFIX=/root/development/leanfactory/extract/tess
 func main() {
 
 	search := "FORMULARIO DEL REGISTRO"
