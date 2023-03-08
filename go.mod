@@ -1,4 +1,4 @@
-module leanfactory/extract
+module juaoose/extract
 
 go 1.19
 
