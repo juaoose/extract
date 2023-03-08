@@ -1,20 +1,17 @@
 package main
 
 import (
-	"errors"
+	"bytes"
 	"fmt"
-	"image/jpeg"
 	"log"
 	"os"
-	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/disintegration/imaging"
 	"github.com/otiai10/gosseract/v2"
 	"github.com/pdfcpu/pdfcpu/pkg/api"
-	pdf "github.com/pdfcpu/pdfcpu/pkg/pdfcpu"
 	"github.com/pdfcpu/pdfcpu/pkg/pdfcpu/model"
 )
 
@@ -23,7 +20,7 @@ func main() {
 
 	search := "FORMULARIO DEL REGISTRO"
 
-	// var wg sync.WaitGroup // create a wait group
+	// var wg sync.WaitGroup
 
 	err := filepath.WalkDir(".", func(path string, d os.DirEntry, err error) error {
 		if err != nil {
@@ -36,16 +33,19 @@ func main() {
 		if d.IsDir() && d.Name() == "result" {
 			return filepath.SkipDir
 		}
+		client := gosseract.NewClient()
+		client.SetLanguage("spa")
+		client.SetPageSegMode(gosseract.PSM_SINGLE_COLUMN)
+		defer client.Close()
 
 		if !d.IsDir() && filepath.Ext(path) == ".pdf" {
-			fmt.Println("Processing:", path)
 			fileName := strings.TrimSuffix(path, ".pdf")
 			outPath := "result/" + fileName + "_formulario.pdf"
 
 			// We start goroutines per extraction job and make sure to wait
 			// wg.Add(1)
 			// go func() {
-			extractPages(path, outPath, search)
+			extractPages(client, path, outPath, search)
 			// wg.Done()
 			// }()
 		}
@@ -58,35 +58,19 @@ func main() {
 	// Wait for all the goroutines to end
 	// wg.Wait()
 
-	clean()
 }
 
 func createDirectories() {
-	tempPath := filepath.Join(".", "/temp")
-	err := os.MkdirAll(tempPath, os.ModePerm)
-	if err != nil {
-		panic(err)
-	}
-
 	resultPath := filepath.Join(".", "/result")
-	err = os.MkdirAll(resultPath, os.ModePerm)
+	err := os.MkdirAll(resultPath, os.ModePerm)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func clean() {
-	dir, err := os.ReadDir("temp")
-	if err != nil {
-		panic(err)
-	}
+func extractPages(client *gosseract.Client, inPath string, outPath string, search string) {
+	defer timer(inPath)()
 
-	for _, d := range dir {
-		os.RemoveAll(path.Join([]string{"temp", d.Name()}...))
-	}
-}
-
-func extractPages(inPath string, outPath string, search string) {
 	// Extract pages as images
 	file, err := os.Open(inPath)
 	if err != nil {
@@ -94,29 +78,21 @@ func extractPages(inPath string, outPath string, search string) {
 	}
 	defer file.Close()
 
-	fileName := strings.TrimSuffix(inPath, ".pdf")
-
-	// We extract and convert every image, this because every document
-	// could have different image types
-	log.Println(fileName)
-	err = api.ExtractImages(file, nil, digestImage(fileName), nil)
-	if err != nil {
-		panic(err)
-	}
-
 	pagesToKeep := []int{}
-	client := gosseract.NewClient()
-	client.SetLanguage("spa")
-	defer client.Close()
-	log.Println("starting ocr")
 
 	// Just so that we can end early
 	found := false
 
 	numPages := pageCount(inPath)
 	for i := 1; i <= numPages; i++ {
-		imagePath := fmt.Sprintf("temp/%v_%d_Im0.jpg", fileName, i)
-		client.SetImage(imagePath)
+		// Extract the current image to a buffer and pass it to tesseract
+		buffer := &bytes.Buffer{}
+		err = api.ExtractImages(file, []string{strconv.Itoa(i)}, toBuffer(buffer), nil)
+		if err != nil {
+			panic(err)
+		}
+
+		client.SetImageFromBytes(buffer.Bytes())
 		text, err := client.Text()
 		if err != nil {
 			// TODO(juaoose) not panicking so that we just move on
@@ -127,57 +103,34 @@ func extractPages(inPath string, outPath string, search string) {
 		if strings.Contains(text, search) {
 			pagesToKeep = append(pagesToKeep, i)
 			found = true
-			log.Printf("Page #%d matches", i)
 		} else if found {
-			log.Printf("Processed %d lines to find document", i)
 			break
 		}
 
 	}
 
-	log.Println("finished ocr")
-
 	// Dont generate an empty or non compliant PDF
 	// The ones we want have at least 2 pages, if not, OCR was not succesful
 	if len(pagesToKeep) < 2 {
-		log.Printf("No PDF generated, %v pages matched.", len(pagesToKeep))
 		return
 	}
 
-	// Use pdfcpu to copy the selected pages to a new PDF file
 	pagesToCopy := []string{}
 	for _, page := range pagesToKeep {
-		pagesToCopy = append(pagesToCopy, fmt.Sprintf("temp/%v_%d_Im0.jpg", fileName, page))
+		pagesToCopy = append(pagesToCopy, strconv.Itoa(page))
 	}
 
-	imp := pdf.DefaultImportConfig()
-	err = api.ImportImagesFile(pagesToCopy, outPath, imp, nil)
+	//Use pdfcpu to generate a trimmed file
+	err = api.TrimFile(inPath, outPath, pagesToCopy, nil)
 	if err != nil {
 		panic(err)
 	}
-
 }
 
-func digestImage(docName string) func(model.Image, bool, int) error {
+// TODO(juaoose) can i improve this? maybe use ExtractImagesRaw?
+func toBuffer(buff *bytes.Buffer) func(model.Image, bool, int) error {
 	return func(img model.Image, singleImgPerPage bool, maxPageDigits int) error {
-		// docname_pageNr_Im0
-		f, err := os.Create(fmt.Sprintf("temp/%v_%v_%v.jpg", docName, img.PageNr, img.Name))
-		if err != nil {
-			panic(err)
-		}
-		defer f.Close()
-
-		imageOut, err := imaging.Decode(img)
-		if err != nil {
-			fmt.Println(err)
-			return errors.New("imaging.Decode() Error")
-		}
-
-		// This affects doc size, 75% seems to be a good spot
-		err = jpeg.Encode(f, imageOut, &jpeg.Options{Quality: 75})
-		if err != nil {
-			return errors.New("digestImage jpeg.Encode( Error")
-		}
+		buff.ReadFrom(img.Reader)
 		return nil
 	}
 }
@@ -195,6 +148,12 @@ func pageCount(pdfPath string) int {
 	if err != nil {
 		panic(err)
 	}
-	log.Printf("This document has %d pages", pageCount)
 	return pageCount
+}
+
+func timer(name string) func() {
+	start := time.Now()
+	return func() {
+		fmt.Printf("%s took %v\n", name, time.Since(start))
+	}
 }
